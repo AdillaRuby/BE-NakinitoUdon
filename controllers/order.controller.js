@@ -71,13 +71,13 @@ module.exports = {
         });
       }
 
-      // buat order
+      // buat order dengan status "unpaid" (belum dibayar)
       const order = await Order.create({
         table_number: data.table_number,
         customer_name: data.customer_name,
         notes: data.notes,
         total_price: total_price,
-        status: "pending"
+        status: "unpaid"  // Status awal: unpaid, belum muncul di dashboard admin
       });
 
       // buat order items dan kurangi stock menu
@@ -98,13 +98,38 @@ module.exports = {
         });
       }
 
-      // ambil order beserta items-nya
+      // ambil order beserta items-nya dengan detail menu
       const orderCreated = await Order.findByPk(order.id, {
-        include: [{ model: OrderItem }]
+        include: [
+          {
+            model: OrderItem,
+            include: [
+              {
+                model: Menu,
+                attributes: ['id', 'name', 'image', 'price']
+              }
+            ]
+          }
+        ]
       });
 
+      // Format response dengan items
+      const orderData = orderCreated.toJSON();
+      if (orderData.OrderItems) {
+        orderData.items = orderData.OrderItems.map(item => ({
+          menu_id: item.menu_id,
+          menu_name: item.Menu ? item.Menu.name : null,
+          name: item.Menu ? item.Menu.name : null,
+          price: item.price,
+          quantity: item.quantity,
+          subtotal: item.subtotal,
+          image: item.Menu ? item.Menu.image : null
+        }));
+        delete orderData.OrderItems;
+      }
+
       return res.status(201).json(
-        response(201, "order berhasil dibuat", orderCreated)
+        response(201, "order berhasil dibuat", orderData)
       );
 
     } catch (error) {
@@ -120,31 +145,67 @@ module.exports = {
   getOrder: async (req, res) => {
     try {
 
-      // jika tidak ada query params page, isi sebagai angka 1 pagenya
-      // tidak menggunakan destruktur () karena dipanggil langsung di kanan .page dan .limit
       const page = Number(req.query.page) || 1;
       const limit = Number(req.query.limit) || 5;
+      const status = req.query.status; // filter status
 
-      // rumus mengambil data pagination : offset = (page - 1) * limit
-      // offset : mengambil data mulai dari angka yg ditentukan. misal offset 10 artinya mengambil data mulai dari baris ke 11
-      // limit : maksimal data yang dimunculkan
-      // (1-1) * 5 = 0 * 5 = 0, offset 0 artinya page 1 data dimulai dari baris ke 1 sampai 5 (limit)
-      // (2-1) * 5 = 1 * 5 = 5, offset 5 artinya page 2 data dimulai dari baris ke 6 sampai 10 (limit)
       const offset = (page - 1) * limit;
 
+      // Build where clause untuk filter status
+      // DEFAULT: Hanya tampilkan order yang sudah PAID (untuk dashboard admin)
+      const whereClause = {};
+      if (status) {
+        whereClause.status = status;
+      } else {
+        // Jika tidak ada filter status, tampilkan semua KECUALI unpaid
+        whereClause.status = {
+          [Op.ne]: 'unpaid'  // ne = not equal, jadi tidak termasuk unpaid
+        };
+      }
+
       const { count, rows } = await Order.findAndCountAll({
+        where: whereClause,
         offset: offset,
         limit: limit,
-        include: [{ model: OrderItem }]
+        include: [
+          {
+            model: OrderItem,
+            include: [
+              {
+                model: Menu,
+                attributes: ['id', 'name', 'image', 'price']
+              }
+            ]
+          }
+        ],
+        order: [['createdAt', 'DESC']]
+      });
+
+      // Format response dengan items
+      const formattedRows = rows.map(order => {
+        const orderData = order.toJSON();
+        if (orderData.OrderItems) {
+          orderData.items = orderData.OrderItems.map(item => ({
+            menu_id: item.menu_id,
+            menu_name: item.Menu ? item.Menu.name : null,
+            name: item.Menu ? item.Menu.name : null,
+            price: item.price,
+            quantity: item.quantity,
+            subtotal: item.subtotal,
+            image: item.Menu ? item.Menu.image : null
+          }));
+          delete orderData.OrderItems;
+        }
+        return orderData;
       });
 
       const formatPagination = {
-        data: rows,           // detail data
-        limit: limit,         // limit per page
-        rangeData: (offset + 1) + "~" + (offset + rows.length), // baris data yg dimunculkan
-        currentPage: page,    // posisi page pagination
-        totalPage: Math.round(count / limit), // jumlah halaman pagination
-        total: count          // jumlah seluruh data
+        data: formattedRows,
+        limit: limit,
+        rangeData: (offset + 1) + "~" + (offset + rows.length),
+        currentPage: page,
+        totalPage: Math.ceil(count / limit),
+        total: count
       };
 
       return res.status(200).json(
@@ -166,8 +227,19 @@ module.exports = {
 
       const { id } = req.params;
 
+      // JOIN dengan OrderItems dan Menu untuk mendapatkan detail lengkap
       const order = await Order.findByPk(id, {
-        include: [{ model: OrderItem }]
+        include: [
+          {
+            model: OrderItem,
+            include: [
+              {
+                model: Menu,
+                attributes: ['id', 'name', 'image', 'price']
+              }
+            ]
+          }
+        ]
       });
 
       if (!order) {
@@ -176,8 +248,23 @@ module.exports = {
         );
       }
 
+      // Format response agar items berisi detail menu
+      const orderData = order.toJSON();
+      if (orderData.OrderItems) {
+        orderData.items = orderData.OrderItems.map(item => ({
+          menu_id: item.menu_id,
+          menu_name: item.Menu ? item.Menu.name : null,
+          name: item.Menu ? item.Menu.name : null,
+          price: item.price,
+          quantity: item.quantity,
+          subtotal: item.subtotal,
+          image: item.Menu ? item.Menu.image : null
+        }));
+        delete orderData.OrderItems;
+      }
+
       return res.status(200).json(
-        response(200, "success", order)
+        response(200, "success", orderData)
       );
 
     } catch (error) {
@@ -196,9 +283,12 @@ module.exports = {
       const { id } = req.params;
       const { status } = req.body;
 
-      // validasi
+      // validasi - status yang diperbolehkan
       const schema = {
-        status: { type: "string", enum: ["pending", "process", "done", "delivered"] }
+        status: { 
+          type: "string", 
+          enum: ["unpaid", "paid", "process", "done", "delivered"] 
+        }
       };
 
       const validate = v.validate({ status }, schema);
@@ -216,14 +306,41 @@ module.exports = {
         );
       }
 
+      // Update status order
       await Order.update({ status }, { where: { id } });
 
+      // Ambil updated order dengan items dan menu detail
       const updatedOrder = await Order.findByPk(id, {
-        include: [{ model: OrderItem }]
+        include: [
+          {
+            model: OrderItem,
+            include: [
+              {
+                model: Menu,
+                attributes: ['id', 'name', 'image', 'price']
+              }
+            ]
+          }
+        ]
       });
 
+      // Format response dengan items
+      const orderData = updatedOrder.toJSON();
+      if (orderData.OrderItems) {
+        orderData.items = orderData.OrderItems.map(item => ({
+          menu_id: item.menu_id,
+          menu_name: item.Menu ? item.Menu.name : null,
+          name: item.Menu ? item.Menu.name : null,
+          price: item.price,
+          quantity: item.quantity,
+          subtotal: item.subtotal,
+          image: item.Menu ? item.Menu.image : null
+        }));
+        delete orderData.OrderItems;
+      }
+
       return res.status(200).json(
-        response(200, "order berhasil diupdate", updatedOrder)
+        response(200, "order berhasil diupdate", orderData)
       );
 
     } catch (error) {
@@ -259,6 +376,72 @@ module.exports = {
 
       return res.status(200).json(
         response(200, "order berhasil dihapus")
+      );
+
+    } catch (error) {
+
+      return res.status(500).json(
+        response(500, "server error", error.message)
+      );
+
+    }
+  },
+
+  // CONFIRM PAYMENT (Customer konfirmasi setelah scan QRIS)
+  confirmPayment: async (req, res) => {
+    try {
+
+      const { id } = req.params;
+
+      const order = await Order.findByPk(id);
+      if (!order) {
+        return res.status(404).json(
+          response(404, "order tidak ditemukan")
+        );
+      }
+
+      // Cek apakah order masih unpaid
+      if (order.status !== 'unpaid') {
+        return res.status(400).json(
+          response(400, `Order sudah dalam status ${order.status}`)
+        );
+      }
+
+      // Update status menjadi paid
+      await Order.update({ status: 'paid' }, { where: { id } });
+
+      // Ambil order dengan items
+      const updatedOrder = await Order.findByPk(id, {
+        include: [
+          {
+            model: OrderItem,
+            include: [
+              {
+                model: Menu,
+                attributes: ['id', 'name', 'image', 'price']
+              }
+            ]
+          }
+        ]
+      });
+
+      // Format response
+      const orderData = updatedOrder.toJSON();
+      if (orderData.OrderItems) {
+        orderData.items = orderData.OrderItems.map(item => ({
+          menu_id: item.menu_id,
+          menu_name: item.Menu ? item.Menu.name : null,
+          name: item.Menu ? item.Menu.name : null,
+          price: item.price,
+          quantity: item.quantity,
+          subtotal: item.subtotal,
+          image: item.Menu ? item.Menu.image : null
+        }));
+        delete orderData.OrderItems;
+      }
+
+      return res.status(200).json(
+        response(200, "pembayaran berhasil dikonfirmasi", orderData)
       );
 
     } catch (error) {

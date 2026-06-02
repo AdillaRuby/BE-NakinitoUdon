@@ -113,18 +113,23 @@ module.exports = {
 
       const { name, sortBy, sort } = req.query;
 
+      // Build where clause
+      const whereClause = {};
+      if (name) {
+        whereClause.name = {
+          [Op.like]: `%${name}%`
+        };
+      }
+
+      // Build order clause
+      const orderClause = [];
+      if (sortBy) {
+        orderClause.push([sortBy, sort || "ASC"]);
+      }
+
       const menu = await Menu.findAll({
-
-        where: name ? {
-          name: {
-            [Op.like]: `%${name}%`
-          }
-        } : {},
-
-        order: sortBy ? [
-          [sortBy, sort || "ASC"]
-        ] : []
-
+        where: whereClause,
+        order: orderClause
       });
 
       return res.status(200).json(
@@ -133,6 +138,7 @@ module.exports = {
 
     } catch (error) {
 
+      console.error("Error in getMenu:", error);
       return res.status(500).json(
         response(500, "server error", error.message)
       );

@@ -23,10 +23,10 @@ app.use('/uploads', (req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   next();
 }, express.static('uploads'));
-app.use('/menus', menuRoutes);
-app.use('/orders', orderRoutes);
-app.use('/transactions', transactionRoutes);
-app.use('/login', loginRoutes);
+app.use('/api/menus', menuRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/transactions', transactionRoutes);
+app.use('/api/login', loginRoutes);
 
 app.get('/', (req, res) => {
     res.send('Hello World!')
